@@ -269,7 +269,7 @@ jobs:
           cd kernel_workspace
           LTO=${{ env.LTO_MODE }} \
           BUILD_CONFIG=${{ env.BUILD_CONFIG }} \
-            common/build/build.sh
+            build/build.sh
 
       - name: 收集构建产物
         run: |
