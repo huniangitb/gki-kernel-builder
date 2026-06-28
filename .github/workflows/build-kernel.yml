@@ -58,7 +58,12 @@ env:
         type: string
         default: ''
 
-      # ---------- 构建配置 ----------
+      # ---------- 构建环境 ----------
+      workspace_tarball_url:
+        description: '预打包构建环境 tarball URL (.tar.zst)，包含 build/build.sh 等基础设施'
+        required: false
+        type: string
+        default: 'https://github.com/huniangitb/Clang-r584948b/releases/download/v1.0.0/common-android12-5.10.tar.zst'
       build_config:
         description: 'GKI 构建配置文件 (相对于 kernel 目录)'
         required: false
@@ -124,6 +129,7 @@ jobs:
           CLANG_DIR_NAME=${{ github.event.inputs.clang_dir_name }}
           PATCH_URLS=${{ github.event.inputs.patch_urls }}
           KERNEL_SUFFIX=${{ github.event.inputs.kernel_suffix }}
+          WORKSPACE_TARBALL_URL=${{ github.event.inputs.workspace_tarball_url }}
           BUILD_CONFIG=${{ github.event.inputs.build_config }}
           LTO_MODE=${{ github.event.inputs.lto_mode }}
           CCACHE_ENABLE=${{ github.event.inputs.ccache_enable }}
@@ -131,20 +137,19 @@ jobs:
           CREATE_RELEASE=${{ github.event.inputs.create_release }}
           ENVEOF
 
-      - name: 克隆内核源码
+      - name: 初始化源码仓库
         run: |
           rm -rf kernel_workspace && mkdir kernel_workspace && cd kernel_workspace
-          git clone --depth=1 \
-            https://github.com/${{ env.KERNEL_REPO }} common \
-            -b ${{ env.KERNEL_BRANCH }}
-
-          # 移除 ABI 保护导出文件（自定义内核通常不需要）
-          rm -f common/android/abi_gki_protected_exports_* 2>/dev/null || true
-
-          # 去除 setlocalversion 中的 -dirty
+          wget -q -c --show-progress --timeout=30 --tries=30 \
+            ${{ env.WORKSPACE_TARBALL_URL }} \
+            -O common-android12-5.10.tar.zst
+          tar -I zstd -xf common-android12-5.10.tar.zst
+          rm -rf common 2>/dev/null || true
+          git clone --depth=1 https://github.com/${{ env.KERNEL_REPO }} common -b ${{ env.KERNEL_BRANCH }}
+          rm common/android/abi_gki_protected_exports_* 2>/dev/null || true
           for f in common/scripts/setlocalversion; do
-            [ -f "$f" ] && sed -i 's/ -dirty//g' "$f"
-            [ -f "$f" ] && sed -i "\$i res=\$(echo \"\$res\" | sed 's/-dirty//g')" "$f"
+            sed -i 's/ -dirty//g' "$f"
+            sed -i "\$i res=\$(echo \"\$res\" | sed 's/-dirty//g')" "$f"
           done
 
       - name: 下载并应用必需补丁
