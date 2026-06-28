@@ -335,7 +335,7 @@ jobs:
 
   release:
     needs: build
-    if: ${{ env.CREATE_RELEASE == 'true' }}
+    if: ${{ github.event.inputs.create_release == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
