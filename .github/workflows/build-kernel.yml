@@ -196,7 +196,7 @@ jobs:
           ARCHIVE_NAME="clang-archive.${CLANG_DOWNLOAD_URL##*.}"
 
           echo "下载 Clang: ${{ env.CLANG_DOWNLOAD_URL }}"
-          wget -q -c --show-progress --timeout=30 --tries=10 -O "$ARCHIVE_NAME" "${{ env.CLANG_DOWNLOAD_URL }}"
+          wget -q --timeout=30 --tries=10 -O "$ARCHIVE_NAME" "${{ env.CLANG_DOWNLOAD_URL }}"
 
           echo "解压 Clang..."
           case "$ARCHIVE_NAME" in
