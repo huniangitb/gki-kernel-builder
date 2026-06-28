@@ -1,0 +1,377 @@
+# ============================================================
+# 通用内核编译工作流
+# 基于 DroidSpaces 工作流修改，去除硬编码配置，可灵活适配
+# 任意 GKI 内核源码仓库 + 自定义补丁 + 自定义工具链
+# ============================================================
+name: Build Kernel
+
+env:
+  TZ: Asia/Shanghai
+  # 默认内核源码配置（可在 workflow_dispatch 中覆盖）
+  KERNEL_REPO: 'Star-ZER0/android_gki_kernel_5.10_common'
+  KERNEL_BRANCH: 'android12-5.10-2026-04_r1'
+  KERNEL_VERSION: '5.10.252'
+
+'on':
+  workflow_dispatch:
+    inputs:
+      # ---------- 内核源码 ----------
+      kernel_repo:
+        description: '内核源码仓库 (owner/repo)'
+        required: true
+        type: string
+        default: 'Star-ZER0/android_gki_kernel_5.10_common'
+      kernel_branch:
+        description: '内核源码分支'
+        required: true
+        type: string
+        default: 'android12-5.10-2026-04_r1'
+      kernel_version:
+        description: '内核版本号 (用于打包命名)'
+        required: true
+        type: string
+        default: '5.10.252'
+
+      # ---------- 工具链 ----------
+      clang_download_url:
+        description: 'Clang 工具链下载 URL (.tar.gz 或 .tar.zst)'
+        required: false
+        type: string
+        default: 'https://github.com/huniangitb/Clang-r584948b/releases/download/v1.0.0/linux-x86-kernel-clang-r584948b.tar.gz'
+      clang_dir_name:
+        description: 'Clang 解压后目录名'
+        required: false
+        type: string
+        default: 'clang-r584948b'
+
+      # ---------- 补丁 ----------
+      patch_urls:
+        description: '补丁 URL 列表，每行一个 (留空则不应用补丁)'
+        required: false
+        type: string
+        default: |
+          https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/refs/heads/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
+          https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/refs/heads/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch
+
+      # ---------- 内核后缀 ----------
+      kernel_suffix:
+        description: '内核名称后缀 (留空则使用默认)'
+        required: false
+        type: string
+        default: ''
+
+      # ---------- 构建配置 ----------
+      build_config:
+        description: 'GKI 构建配置文件 (相对于 kernel 目录)'
+        required: false
+        type: string
+        default: 'common/build.config.gki.aarch64'
+      lto_mode:
+        description: 'LTO 模式 (thin / full / none)'
+        required: false
+        type: string
+        default: 'thin'
+      ccache_enable:
+        description: '启用 ccache 加速 (true / false)'
+        required: false
+        type: string
+        default: 'false'
+
+      # ---------- AnyKernel3 ----------
+      anykernel3_enable:
+        description: '打包 AnyKernel3 刷机包 (true / false)'
+        required: false
+        type: string
+        default: 'true'
+
+      # ---------- Release ----------
+      create_release:
+        description: '创建 GitHub Release (true / false)'
+        required: false
+        type: string
+        default: 'true'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 最大化构建空间
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: 安装基础依赖
+        run: |
+          sudo apt update
+          sudo apt install -y curl bison flex make binutils dwarves git lld zip perl \
+            gcc python3 python-is-python3 bc libssl-dev libelf-dev abigail-tools \
+            coreutils zstd
+          sudo ln -sf /usr/bin/dd /bin/dd 2>/dev/null || true
+
+      - name: 克隆内核源码
+        run: |
+          rm -rf kernel_workspace && mkdir kernel_workspace && cd kernel_workspace
+          git clone --depth=1 \
+            https://github.com/${{ github.event.inputs.kernel_repo }} common \
+            -b ${{ github.event.inputs.kernel_branch }}
+
+          # 移除 ABI 保护导出文件（自定义内核通常不需要）
+          rm -f common/android/abi_gki_protected_exports_* 2>/dev/null || true
+
+          # 去除 setlocalversion 中的 -dirty
+          for f in common/scripts/setlocalversion; do
+            [ -f "$f" ] && sed -i 's/ -dirty//g' "$f"
+            [ -f "$f" ] && sed -i "\$i res=\$(echo \"\$res\" | sed 's/-dirty//g')" "$f"
+          done
+
+      - name: 下载并应用必需补丁
+        run: |
+          cd kernel_workspace
+          PATCH_URLS="${{ github.event.inputs.patch_urls }}"
+          if [ -z "$PATCH_URLS" ]; then
+            echo "未提供补丁，跳过"
+            exit 0
+          fi
+
+          mkdir -p patches
+          idx=1
+          echo "$PATCH_URLS" | while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            # 跳过注释行（以 # 开头）
+            case "$url" in \#*) continue ;; esac
+
+            patch_file="patches/$(printf '%03d' $idx)-$(basename "$url")"
+            echo "下载补丁 [$idx]: $url"
+            wget -q --timeout=30 --tries=5 -O "$patch_file" "$url" || {
+              echo "警告: 补丁 $idx 下载失败，跳过"
+              continue
+            }
+            idx=$((idx + 1))
+          done
+
+          # 应用补丁到内核源码
+          cd common
+          for p in ../patches/*.patch; do
+            [ -f "$p" ] || continue
+            echo "应用补丁: $p"
+            patch -p1 < "$p" && echo "  ✓ 成功" || echo "  ✗ 失败"
+          done
+
+      - name: 下载并安装 Clang 工具链
+        run: |
+          cd kernel_workspace
+          CLANG_URL="${{ github.event.inputs.clang_download_url }}"
+          CLANG_DIR="${{ github.event.inputs.clang_dir_name }}"
+
+          if [ -z "$CLANG_URL" ]; then
+            echo "未提供 Clang 下载地址，跳过"
+            exit 0
+          fi
+
+          mkdir -p "prebuilts-master/clang/host/linux-x86/${CLANG_DIR}"
+          ARCHIVE_NAME="clang-archive${CLANG_URL##*.}"
+
+          echo "下载 Clang: $CLANG_URL"
+          wget -q -c --show-progress --timeout=30 --tries=10 -O "$ARCHIVE_NAME" "$CLANG_URL"
+
+          echo "解压 Clang..."
+          case "$ARCHIVE_NAME" in
+            *.zst) tar -I zstd -xf "$ARCHIVE_NAME" -C "prebuilts-master/clang/host/linux-x86/${CLANG_DIR}" ;;
+            *.gz)  tar -xzf "$ARCHIVE_NAME" -C "prebuilts-master/clang/host/linux-x86/${CLANG_DIR}" ;;
+            *.xz)  tar -xJf "$ARCHIVE_NAME" -C "prebuilts-master/clang/host/linux-x86/${CLANG_DIR}" ;;
+            *.bz2) tar -xjf "$ARCHIVE_NAME" -C "prebuilts-master/clang/host/linux-x86/${CLANG_DIR}" ;;
+            *)     echo "警告: 未知压缩格式，尝试 tar"; tar -xf "$ARCHIVE_NAME" -C "prebuilts-master/clang/host/linux-x86/${CLANG_DIR}" ;;
+          esac
+
+          # 验证
+          CLANG_BIN="prebuilts-master/clang/host/linux-x86/${CLANG_DIR}/bin/clang"
+          if [ -f "$CLANG_BIN" ]; then
+            echo "Clang 安装成功:"
+            $CLANG_BIN --version
+          else
+            echo "错误: 未找到 clang 二进制文件"
+            echo "搜索所有可能的 clang 路径..."
+            find "prebuilts-master/clang/host/linux-x86/${CLANG_DIR}" -name clang -type f 2>/dev/null
+            exit 1
+          fi
+
+      - name: 添加内核名称后缀
+        run: |
+          cd kernel_workspace
+          SUFFIX="${{ github.event.inputs.kernel_suffix }}"
+          [ -z "$SUFFIX" ] && SUFFIX="custom"
+
+          echo "内核名称后缀: $SUFFIX"
+
+          for f in common/scripts/setlocalversion; do
+            [ -f "$f" ] || continue
+            # 将默认输出的 res 替换为自定义后缀
+            if grep -q 'echo "\$res"' "$f"; then
+              sed -i "\$s|echo \"\$res\"|echo \"-${SUFFIX}\"|" "$f"
+            else
+              # 如果原文件没有标准 echo $res，尝试追加
+              echo "警告: setlocalversion 格式不标准，在文件末尾追加"
+              echo "echo \"-${SUFFIX}\"" >> "$f"
+            fi
+          done
+
+      - name: 配置构建环境
+        run: |
+          cd kernel_workspace
+          CLANG_DIR="${{ github.event.inputs.clang_dir_name }}"
+          BUILD_CONFIG="${{ github.event.inputs.build_config }}"
+
+          # 替换 Clang 路径
+          CLANG_REL_PATH="prebuilts-master/clang/host/linux-x86/${CLANG_DIR}/bin"
+          if [ -f common/build.config.common ]; then
+            sed -i "s|CLANG_PREBUILT_BIN=.*|CLANG_PREBUILT_BIN=$CLANG_REL_PATH|" common/build.config.common
+          fi
+          if [ -f common/build.config.gki ]; then
+            # 移除 check_defconfig 检查（自定义内核不需要）
+            sed -i 's/check_defconfig//' common/build.config.gki
+          fi
+
+          # 配置 ccache
+          if [ "${{ github.event.inputs.ccache_enable }}" = "true" ]; then
+            sudo apt install -y ccache
+            echo "ccache 已安装"
+          fi
+
+          echo "构建配置摘要:"
+          if [ -f common/build.config.common ]; then
+            grep -E "CROSS_COMPILE|CLANG_PREBUILT_BIN|CC|LD" common/build.config.common || true
+          fi
+
+      - name: 构建内核
+        run: |
+          cd kernel_workspace
+          LTO=${{ github.event.inputs.lto_mode }} \
+          BUILD_CONFIG=${{ github.event.inputs.build_config }} \
+            common/build/build.sh
+
+      - name: 收集构建产物
+        run: |
+          cd kernel_workspace
+          mkdir -p build_artifacts
+
+          # 内核镜像
+          IMAGE_FILE=$(find out -name Image -type f 2>/dev/null | head -n1)
+          if [ -n "$IMAGE_FILE" ]; then
+            cp "$IMAGE_FILE" build_artifacts/
+            echo "内核镜像: $IMAGE_FILE ($(du -h "$IMAGE_FILE" | cut -f1))"
+          else
+            echo "警告: 未找到 Image"
+          fi
+
+          # .config
+          CONFIG_FILE="out/android12-5.10/common/.config"
+          [ -f "$CONFIG_FILE" ] && cp "$CONFIG_FILE" build_artifacts/config
+
+          # 模块符号
+          MODULE_SYMVERS="out/android12-5.10/common/Module.symvers"
+          [ -f "$MODULE_SYMVERS" ] && cp "$MODULE_SYMVERS" build_artifacts/
+
+          # ABI 符号列表
+          ABI_SYMLIST="out/android12-5.10/common/abi_symbollist.raw"
+          [ -f "$ABI_SYMLIST" ] && cp "$ABI_SYMLIST" build_artifacts/
+
+          echo "构建产物列表:"
+          ls -la build_artifacts/
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel_Build_Artifacts
+          path: kernel_workspace/build_artifacts/
+
+      - name: 打包 AnyKernel3 刷机包
+        if: ${{ github.event.inputs.anykernel3_enable == 'true' }}
+        run: |
+          cd kernel_workspace
+          # 使用仓库本地的 AnyKernel3（来自 WildKernels/AnyKernel3 gki-2.0）
+          cp -r ${{ github.workspace }}/AnyKernel3 .
+
+          # 复制内核镜像
+          IMAGE_FILE=$(find . -name Image -type f | head -n1)
+          if [ -n "$IMAGE_FILE" ]; then
+            cp "$IMAGE_FILE" AnyKernel3/
+            echo "已复制镜像: $IMAGE_FILE"
+          else
+            echo "错误: 未找到 Image，跳过打包"
+            exit 1
+          fi
+
+          # 写入版本信息
+          KERNEL_VER="${{ github.event.inputs.kernel_version }}"
+          SUFFIX="${{ github.event.inputs.kernel_suffix }}"
+          [ -z "$SUFFIX" ] && SUFFIX="custom"
+          echo "${KERNEL_VER}-${SUFFIX}" > AnyKernel3/kernel_version.txt
+
+          cd AnyKernel3
+          ZIPNAME="AnyKernel3_${KERNEL_VER}.zip"
+          zip -r "../${ZIPNAME}" ./*
+          echo "刷机包打包完成: ${ZIPNAME}"
+
+      - name: 上传刷机包
+        if: ${{ github.event.inputs.anykernel3_enable == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel_ZIP
+          path: kernel_workspace/*.zip
+
+  release:
+    needs: build
+    if: ${{ github.event.inputs.create_release == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+
+    steps:
+      - name: 下载刷机包
+        uses: actions/download-artifact@v4
+        with:
+          name: Kernel_ZIP
+          path: ./release_zips
+
+      - name: 准备 Release 信息
+        id: vars
+        run: |
+          ZIP_FILE=$(ls ./release_zips/*.zip 2>/dev/null | head -n1)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "未找到 ZIP，尝试从构建产物获取版本信息"
+            KERNEL_VER="${{ github.event.inputs.kernel_version }}"
+          else
+            KERNEL_VER=$(unzip -p "$ZIP_FILE" kernel_version.txt 2>/dev/null || echo "${{ github.event.inputs.kernel_version }}")
+          fi
+
+          TIME_STR="$(date +'%y%m%d%H%M%S')"
+          TIME_FORM="$(date +'%Y-%m-%d %H:%M:%S')"
+          TAG_NAME="${KERNEL_VER}-${TIME_STR}"
+
+          echo "FULL_VERSION=${KERNEL_VER}" >> $GITHUB_ENV
+          echo "TIME_FORM=${TIME_FORM}" >> $GITHUB_ENV
+          echo "TAG_NAME=${TAG_NAME}" >> $GITHUB_ENV
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: "Kernel ${{ env.FULL_VERSION }}"
+          body: |
+            Auto-built kernel
+            Version: ${{ env.FULL_VERSION }}
+            Repo: ${{ github.event.inputs.kernel_repo }} @ ${{ github.event.inputs.kernel_branch }}
+            Build time: ${{ env.TIME_FORM }}
+          files: ./release_zips/*.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
