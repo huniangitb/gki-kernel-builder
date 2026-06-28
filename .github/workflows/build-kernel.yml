@@ -273,6 +273,7 @@ jobs:
           echo -e "\n# Stack protector options" >> "$DEFCONFIG_PATH"
           echo "CONFIG_STACKPROTECTOR=y" >> "$DEFCONFIG_PATH"
           echo "CONFIG_STACKPROTECTOR_STRONG=y" >> "$DEFCONFIG_PATH"
+          echo "# CONFIG_STACKPROTECTOR_PER_TASK is not set" >> "$DEFCONFIG_PATH"
 
           echo "===== 修改后配置关键项 ====="
           grep -E "CONFIG_STACKPROTECTOR|CONFIG_STACKPROTECTOR_STRONG" "$DEFCONFIG_PATH"
@@ -282,7 +283,17 @@ jobs:
           cd kernel_workspace
           LTO=${{ env.LTO_MODE }} \
           BUILD_CONFIG=${{ env.BUILD_CONFIG }} \
-            build/build.sh
+            build/build.sh || {
+            echo "===== 编译失败，输出 .config 调试 ====="
+            find out -name .config -type f 2>/dev/null | head -n5 | while read cfg; do
+              echo ">>> $cfg"
+              grep -E "CONFIG_STACKPROTECTOR|CONFIG_CC_STACKPROTECTOR" "$cfg" || true
+            done
+            # 同时输出 gki_defconfig 最终状态
+            echo ">>> gki_defconfig 最终状态:"
+            grep -E "CONFIG_STACKPROTECTOR|CONFIG_CC_STACKPROTECTOR" "common/arch/arm64/configs/gki_defconfig" || true
+            exit 1
+          }
 
       - name: 收集构建产物
         run: |
