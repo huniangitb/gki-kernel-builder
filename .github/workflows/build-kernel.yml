@@ -263,24 +263,20 @@ jobs:
             grep -E "CROSS_COMPILE|CLANG_PREBUILT_BIN|CC|LD" common/build.config.common || true
           fi
 
-      - name: 强制禁用堆栈保护
+      - name: 恢复堆栈保护相关配置
         run: |
           cd kernel_workspace
           DEFCONFIG_PATH="common/arch/arm64/configs/gki_defconfig"
           echo "===== 修改前配置关键项 ====="
-          grep -E "CONFIG_HAVE_STACKPROTECTOR|CONFIG_STACKPROTECTOR" "$DEFCONFIG_PATH" || echo "未找到相关项"
+          grep -E "CONFIG_STACKPROTECTOR|CONFIG_STACKPROTECTOR_STRONG" "$DEFCONFIG_PATH" || echo "未找到相关项"
 
-          # 强制禁用所有堆栈保护选项（覆盖 clang 默认开启行为）
-          sed -i '/^CONFIG_HAVE_STACKPROTECTOR[= ]/d' "$DEFCONFIG_PATH"
-          sed -i '/^CONFIG_STACKPROTECTOR[= ]/d' "$DEFCONFIG_PATH"
-          sed -i '/^CONFIG_STACKPROTECTOR_STRONG[= ]/d' "$DEFCONFIG_PATH"
-          sed -i '/^CONFIG_STACKPROTECTOR_PER_TASK[= ]/d' "$DEFCONFIG_PATH"
-          echo "# CONFIG_HAVE_STACKPROTECTOR is not set" >> "$DEFCONFIG_PATH"
-          echo "# CONFIG_STACKPROTECTOR is not set" >> "$DEFCONFIG_PATH"
-          echo "# CONFIG_STACKPROTECTOR_STRONG is not set" >> "$DEFCONFIG_PATH"
+          echo -e "\n# Stack protector options" >> "$DEFCONFIG_PATH"
+          echo "CONFIG_STACKPROTECTOR=y" >> "$DEFCONFIG_PATH"
+          echo "CONFIG_STACKPROTECTOR_STRONG=y" >> "$DEFCONFIG_PATH"
+          echo "# CONFIG_STACKPROTECTOR_PER_TASK is not set" >> "$DEFCONFIG_PATH"
 
           echo "===== 修改后配置关键项 ====="
-          grep -E "CONFIG_HAVE_STACKPROTECTOR|CONFIG_STACKPROTECTOR" "$DEFCONFIG_PATH"
+          grep -E "CONFIG_STACKPROTECTOR|CONFIG_STACKPROTECTOR_STRONG" "$DEFCONFIG_PATH"
 
       - name: 构建内核
         run: |
