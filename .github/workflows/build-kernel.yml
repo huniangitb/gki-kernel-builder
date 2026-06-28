@@ -101,6 +101,15 @@ jobs:
       - name: 检出仓库代码
         uses: actions/checkout@v4
 
+      - name: 确保 AnyKernel3 目录存在
+        run: |
+          if [ -d "AnyKernel3" ]; then
+            echo "✅ AnyKernel3 已存在（仓库自带）"
+          else
+            echo "⚠️ AnyKernel3 不存在，从 WildKernels/AnyKernel3(gki-2.0) 克隆"
+            git clone --depth=1 -b gki-2.0 https://github.com/WildKernels/AnyKernel3.git
+          fi
+
       - name: 最大化构建空间
         uses: easimon/maximize-build-space@master
         with:
@@ -351,8 +360,8 @@ jobs:
           # 导出供后续 release job 使用
           echo "REAL_VERSION=${REAL_VERSION}" >> $GITHUB_ENV
 
-          # 使用仓库本地的 AnyKernel3（来自 WildKernels/AnyKernel3 gki-2.0）
-          cp -r ${{ github.workspace }}/AnyKernel3 .
+          # 复制 AnyKernel3（已在工作流最开始确保存在）
+          cp -r ../AnyKernel3 .
 
           # 复制内核镜像
           IMAGE_FILE=$(find . -name Image -type f | head -n1)
