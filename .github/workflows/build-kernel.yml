@@ -263,6 +263,14 @@ jobs:
             grep -E "CROSS_COMPILE|CLANG_PREBUILT_BIN|CC|LD" common/build.config.common || true
           fi
 
+      - name: 恢复堆栈保护相关配置
+        run: |
+          cd kernel_workspace/common
+          # 启用堆栈保护选项
+          scripts/config --enable CONFIG_STACKPROTECTOR
+          scripts/config --enable CONFIG_STACKPROTECTOR_STRONG
+          echo "已启用 CONFIG_STACKPROTECTOR 和 CONFIG_STACKPROTECTOR_STRONG"
+
       - name: 构建内核
         run: |
           cd kernel_workspace
