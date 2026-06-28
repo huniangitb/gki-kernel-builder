@@ -147,11 +147,6 @@ jobs:
           rm -rf common 2>/dev/null || true
           git clone --depth=1 https://github.com/${{ env.KERNEL_REPO }} common -b ${{ env.KERNEL_BRANCH }}
           rm common/android/abi_gki_protected_exports_* 2>/dev/null || true
-          # 去除 setlocalversion 中的 -dirty，保持版本号干净
-          for f in common/scripts/setlocalversion; do
-            sed -i 's/ -dirty//g' "$f"
-            sed -i "\$i res=\$(echo \"\$res\" | sed 's/-dirty//g')" "$f"
-          done
 
       - name: 下载并应用必需补丁
         run: |
