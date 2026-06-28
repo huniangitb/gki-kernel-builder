@@ -78,7 +78,7 @@ env:
         description: '启用 ccache 加速 (true / false)'
         required: false
         type: string
-        default: 'false'
+        default: 'true'
 
       # ---------- AnyKernel3 ----------
       anykernel3_enable:
@@ -149,10 +149,19 @@ jobs:
           CREATE_RELEASE=${{ github.event.inputs.create_release }}
           ENVEOF
 
+      - name: 恢复 ccache 缓存
+        if: ${{ env.CCACHE_ENABLE == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
       - name: 初始化源码仓库
         run: |
           rm -rf kernel_workspace && mkdir kernel_workspace && cd kernel_workspace
-          wget -q -c --show-progress --timeout=30 --tries=30 \
+          wget -q --show-progress --timeout=30 --tries=30 \
             ${{ env.WORKSPACE_TARBALL_URL }} \
             -O common-android12-5.10.tar.zst
           tar -I zstd -xf common-android12-5.10.tar.zst
@@ -269,9 +278,22 @@ jobs:
           fi
 
           # 配置 ccache
+          sudo apt install -y ccache
           if [ "${{ env.CCACHE_ENABLE }}" = "true" ]; then
-            sudo apt install -y ccache
-            echo "ccache 已安装"
+            echo "ccache 已安装，正在配置..."
+            # 设置缓存目录（与 actions/cache 保持一致）
+            mkdir -p ~/.ccache
+            echo "CCACHE_DIR=~/.ccache" >> $GITHUB_ENV
+            echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
+            ccache --max-size 2G
+            ccache --zero-stats 2>/dev/null || true
+            # 集成到内核构建配置
+            if [ -f common/build.config.common ]; then
+              sed -i '/^CCACHE=/d' common/build.config.common
+              echo 'CCACHE=ccache' >> common/build.config.common
+            fi
+          else
+            echo "ccache 已安装但未启用"
           fi
 
           echo "构建配置摘要:"
@@ -299,6 +321,8 @@ jobs:
           cd kernel_workspace
           LTO=${{ env.LTO_MODE }} \
           BUILD_CONFIG=${{ env.BUILD_CONFIG }} \
+          CCACHE_DIR=${CCACHE_DIR:-~/.ccache} \
+          CCACHE_MAXSIZE=${CCACHE_MAXSIZE:-2G} \
             build/build.sh || {
             echo "===== 编译失败，输出 .config 调试 ====="
             find out -name .config -type f 2>/dev/null | head -n5 | while read cfg; do
