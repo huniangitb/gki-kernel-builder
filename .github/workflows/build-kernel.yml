@@ -265,11 +265,17 @@ jobs:
 
       - name: 恢复堆栈保护相关配置
         run: |
-          cd kernel_workspace/common
-          # 启用堆栈保护选项
-          scripts/config --enable CONFIG_STACKPROTECTOR
-          scripts/config --enable CONFIG_STACKPROTECTOR_STRONG
-          echo "已启用 CONFIG_STACKPROTECTOR 和 CONFIG_STACKPROTECTOR_STRONG"
+          cd kernel_workspace
+          DEFCONFIG_PATH="common/arch/arm64/configs/gki_defconfig"
+          echo "===== 修改前配置关键项 ====="
+          grep -E "CONFIG_STACKPROTECTOR|CONFIG_STACKPROTECTOR_STRONG" "$DEFCONFIG_PATH" || echo "未找到相关项"
+
+          echo -e "\n# Stack protector options" >> "$DEFCONFIG_PATH"
+          echo "CONFIG_STACKPROTECTOR=y" >> "$DEFCONFIG_PATH"
+          echo "CONFIG_STACKPROTECTOR_STRONG=y" >> "$DEFCONFIG_PATH"
+
+          echo "===== 修改后配置关键项 ====="
+          grep -E "CONFIG_STACKPROTECTOR|CONFIG_STACKPROTECTOR_STRONG" "$DEFCONFIG_PATH"
 
       - name: 构建内核
         run: |
