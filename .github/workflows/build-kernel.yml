@@ -223,7 +223,10 @@ jobs:
         run: |
           cd kernel_workspace
           SUFFIX="${{ env.KERNEL_SUFFIX }}"
-          [ -z "$SUFFIX" ] && SUFFIX="custom"
+          if [ -z "$SUFFIX" ]; then
+            echo "未指定内核后缀，跳过修改"
+            exit 0
+          fi
 
           echo "内核名称后缀: $SUFFIX"
 
