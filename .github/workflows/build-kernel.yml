@@ -98,6 +98,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+
       - name: 最大化构建空间
         uses: easimon/maximize-build-space@master
         with:
