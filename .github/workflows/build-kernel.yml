@@ -309,6 +309,16 @@ jobs:
         if: ${{ env.ANY_KERNEL3 == 'true' }}
         run: |
           cd kernel_workspace
+
+          # 从编译产物中获取实际内核版本（如 5.10.252）
+          cd common
+          REAL_VERSION=$(make -s kernelversion 2>/dev/null || echo "${{ env.KERNEL_VERSION }}")
+          cd ..
+          echo "实际内核版本: ${REAL_VERSION}"
+
+          # 导出供后续 release job 使用
+          echo "REAL_VERSION=${REAL_VERSION}" >> $GITHUB_ENV
+
           # 使用仓库本地的 AnyKernel3（来自 WildKernels/AnyKernel3 gki-2.0）
           cp -r ${{ github.workspace }}/AnyKernel3 .
 
@@ -322,11 +332,11 @@ jobs:
             exit 1
           fi
 
-          # 写入版本信息
-          echo "${{ env.KERNEL_VERSION }}-${KERNEL_SUFFIX:-custom}" > AnyKernel3/kernel_version.txt
+          # 写入实际版本信息
+          echo "${REAL_VERSION}" > AnyKernel3/kernel_version.txt
 
           cd AnyKernel3
-          ZIPNAME="AnyKernel3_${{ env.KERNEL_VERSION }}.zip"
+          ZIPNAME="AnyKernel3_${REAL_VERSION}.zip"
           zip -r "../${ZIPNAME}" ./*
           echo "刷机包打包完成: ${ZIPNAME}"
 
