@@ -283,7 +283,7 @@ jobs:
             echo "ccache 已安装，正在配置..."
             # 设置缓存目录（与 actions/cache 保持一致）
             mkdir -p ~/.ccache
-            echo "CCACHE_DIR=~/.ccache" >> $GITHUB_ENV
+            echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
             echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
             ccache --max-size 2G
             ccache --zero-stats 2>/dev/null || true
@@ -321,7 +321,7 @@ jobs:
           cd kernel_workspace
           LTO=${{ env.LTO_MODE }} \
           BUILD_CONFIG=${{ env.BUILD_CONFIG }} \
-          CCACHE_DIR=${CCACHE_DIR:-~/.ccache} \
+          CCACHE_DIR=${CCACHE_DIR:-$HOME/.ccache} \
           CCACHE_MAXSIZE=${CCACHE_MAXSIZE:-2G} \
             build/build.sh || {
             echo "===== 编译失败，输出 .config 调试 ====="
