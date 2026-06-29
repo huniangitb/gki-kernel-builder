@@ -49,7 +49,7 @@ env:
         description: '补丁 URL 列表，每行一个 (留空则不应用补丁)'
         required: false
         type: string
-        default: ''
+        default: 'https://raw.githubusercontent.com/huniangitb/gki-kernel-builder/master/0001-media-v4l2-ctrls-fix-NULL-pointer-deref-when-handler.patch'
 
       # ---------- 内核后缀 ----------
       kernel_suffix:
