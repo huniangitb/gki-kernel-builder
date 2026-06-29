@@ -1,0 +1,116 @@
+From: AtomCode <noreply@atomgit.com>
+Date: Mon, 29 Jun 2026 09:00:00 +0800
+Subject: [PATCH] media: v4l2-ctrls: fix NULL pointer deref when handler has no
+ lock
+
+Commit 7b4c52fd5597 ("media: v4l2-ctrls: always copy the controls on
+completion") added a fallback path in v4l2_ctrl_request_complete() that
+creates a new control handler when no request object is found.
+
+This new path calls v4l2_ctrl_request_bind() which accesses
+from->lock (the driver's original handler lock). However, some drivers
+(notably the MediaTek AIE driver) initialize their control handler with
+v4l2_ctrl_handler_init() but never call v4l2_ctrl_handler_setlock(),
+leaving from->lock == NULL. This causes a NULL pointer dereference
+at mutex_lock(from->lock).
+
+Fix by adding NULL checks before every mutex_lock/unlock on from->lock
+and main_hdl->lock across v4l2_ctrl_request_clone(),
+v4l2_ctrl_request_queue(), v4l2_ctrl_request_unbind(),
+v4l2_ctrl_request_bind() and v4l2_ctrl_request_complete().
+
+Fixes: 7b4c52fd5597 ("media: v4l2-ctrls: always copy the controls on completion")
+Signed-off-by: AtomCode <noreply@atomgit.com>
+---
+ drivers/media/v4l2-core/v4l2-ctrls.c | 25 ++++++++++++++++++-------
+ 1 file changed, 18 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/media/v4l2-core/v4l2-ctrls.c b/drivers/media/v4l2-core/v4l2-ctrls.c
+index 8688ad18fe53..375710e276bb 100644
+--- a/drivers/media/v4l2-core/v4l2-ctrls.c
++++ b/drivers/media/v4l2-core/v4l2-ctrls.c
+@@ -3498,7 +3498,8 @@ static int v4l2_ctrl_request_clone(struct v4l2_ctrl_handler *hdl,
+ 
+ 	WARN_ON(hdl->lock != &hdl->_lock);
+ 
+-	mutex_lock(from->lock);
++	if (from->lock)
++		mutex_lock(from->lock);
+ 	list_for_each_entry(ref, &from->ctrl_refs, node) {
+ 		struct v4l2_ctrl *ctrl = ref->ctrl;
+ 		struct v4l2_ctrl_ref *new_ref;
+@@ -3513,7 +3514,8 @@ static int v4l2_ctrl_request_clone(struct v4l2_ctrl_handler *hdl,
+ 		if (err)
+ 			break;
+ 	}
+-	mutex_unlock(from->lock);
++	if (from->lock)
++		mutex_unlock(from->lock);
+ 	return err;
+ }
+ 
+@@ -3523,10 +3525,12 @@ static void v4l2_ctrl_request_queue(struct media_request_object *obj)
+ 		container_of(obj, struct v4l2_ctrl_handler, req_obj);
+ 	struct v4l2_ctrl_handler *main_hdl = obj->priv;
+ 
+-	mutex_lock(main_hdl->lock);
++	if (main_hdl->lock)
++		mutex_lock(main_hdl->lock);
+ 	list_add_tail(&hdl->requests_queued, &main_hdl->requests_queued);
+ 	hdl->request_is_queued = true;
+-	mutex_unlock(main_hdl->lock);
++	if (main_hdl->lock)
++		mutex_unlock(main_hdl->lock);
+ }
+ 
+ static void v4l2_ctrl_request_unbind(struct media_request_object *obj)
+@@ -3535,13 +3539,15 @@ static void v4l2_ctrl_request_unbind(struct media_request_object *obj)
+ 		container_of(obj, struct v4l2_ctrl_handler, req_obj);
+ 	struct v4l2_ctrl_handler *main_hdl = obj->priv;
+ 
+-	mutex_lock(main_hdl->lock);
++	if (main_hdl->lock)
++		mutex_lock(main_hdl->lock);
+ 	list_del_init(&hdl->requests);
+ 	if (hdl->request_is_queued) {
+ 		list_del_init(&hdl->requests_queued);
+ 		hdl->request_is_queued = false;
+ 	}
+-	mutex_unlock(main_hdl->lock);
++	if (main_hdl->lock)
++		mutex_unlock(main_hdl->lock);
+ }
+ 
+ static void v4l2_ctrl_request_release(struct media_request_object *obj)
+@@ -3598,9 +3604,11 @@ static int v4l2_ctrl_request_bind(struct media_request *req,
+ 		ret = media_request_object_bind(req, &req_ops,
+ 						from, false, &hdl->req_obj);
+ 		if (!ret) {
+-			mutex_lock(from->lock);
++			if (from->lock)
++				mutex_lock(from->lock);
+ 			list_add_tail(&hdl->requests, &from->requests);
+-			mutex_unlock(from->lock);
++			if (from->lock)
++				mutex_unlock(from->lock);
+ 		}
+ 	}
+ 	return ret;
+@@ -4550,11 +4558,13 @@ void v4l2_ctrl_request_complete(struct media_request *req,
+ 		v4l2_ctrl_unlock(ctrl);
+ 	}
+ 
+-	mutex_lock(main_hdl->lock);
++	if (main_hdl->lock)
++		mutex_lock(main_hdl->lock);
+ 	WARN_ON(!hdl->request_is_queued);
+ 	list_del_init(&hdl->requests_queued);
+ 	hdl->request_is_queued = false;
+-	mutex_unlock(main_hdl->lock);
++	if (main_hdl->lock)
++		mutex_unlock(main_hdl->lock);
+ 	media_request_object_complete(obj);
+ 	media_request_object_put(obj);
+ }
+-- 
+2.34.1
